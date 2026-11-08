@@ -1,4 +1,4 @@
-# distributed-drive-client
+# drivenet
 
 A CLI tool that splits files into encrypted chunks and distributes them across multiple Google Drive accounts, effectively multiplying your available storage.
 

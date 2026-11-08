@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <title>drivenet</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="boot" class="center">
+    <p class="dim">starting<span class="caret"></span></p>
+  </div>
+
+  <section id="gate" class="center" hidden>
+    <h1 class="mark">drivenet<span class="caret"></span></h1>
+
+    <div id="setup" hidden>
+      <p class="lead">Google sign-in isn't set up yet.</p>
+      <ol>
+        <li>In <code>console.cloud.google.com</code>, create a project and enable the Google Drive API.</li>
+        <li>On the OAuth consent screen choose External, add yourself as a test user, and add the scope <code>.../auth/drive.appdata</code>.</li>
+        <li>Create an OAuth client ID of type Web application.</li>
+        <li>Add <code id="origin"></code> as an authorized JavaScript origin.</li>
+        <li>Paste the client ID into <code>web/config.js</code> and reload.</li>
+      </ol>
+    </div>
+
+    <div id="signin" hidden>
+      <div id="mock-box" hidden>
+        <label for="mock-email">Account email</label>
+        <input id="mock-email" type="text" autocomplete="off">
+      </div>
+      <div class="actions">
+        <button id="google" class="btn solid" type="button">Sign in with Google</button>
+      </div>
+    </div>
+
+    <div id="own-id" hidden>
+      <p id="own-id-state" class="dim"></p>
+      <button id="own-id-toggle" class="btn quiet" type="button">Use your own client ID</button>
+      <form id="own-id-form" hidden autocomplete="off">
+        <label for="own-id-input">Google OAuth client ID</label>
+        <input id="own-id-input" type="text" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off">
+        <div class="actions">
+          <button class="btn solid" type="submit">Save</button>
+          <button id="own-id-reset" class="btn quiet" type="button">Use default</button>
+        </div>
+      </form>
+    </div>
+
+    <form id="unlock" hidden autocomplete="off">
+      <p class="dim">Signed in as <b id="who"></b></p>
+      <label for="password">Vault password</label>
+      <input id="password" type="password" autocomplete="off">
+      <div id="repeat-box" hidden>
+        <label for="password2">Repeat password</label>
+        <input id="password2" type="password" autocomplete="off">
+        <p class="warn">There is no password recovery. Forget it and the files are gone.</p>
+      </div>
+      <div class="actions">
+        <button id="unlock-btn" class="btn solid" type="submit">Unlock</button>
+        <button id="mode" class="btn" type="button">New vault</button>
+        <button id="switch" class="btn quiet" type="button">Other account</button>
+      </div>
+    </form>
+
+    <p id="gate-note" class="note" role="status"></p>
+  </section>
+
+  <div id="app" hidden>
+    <header class="top">
+      <h1 class="mark">drivenet<span class="caret"></span></h1>
+      <nav id="path" aria-label="Folder"></nav>
+      <div class="tools">
+        <button id="up-files" class="btn" type="button">Upload files</button>
+        <button id="up-folder" class="btn" type="button">Upload folder</button>
+        <button id="lock" class="btn quiet" type="button">Lock</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="files" aria-label="Files">
+        <form id="search" class="search" role="search">
+          <input id="q" type="text" placeholder="Search  ( / )" aria-label="Search" autocomplete="off">
+          <label class="check"><input id="opt-exact" type="checkbox"> exact</label>
+          <label class="check"><input id="opt-regex" type="checkbox"> regex</label>
+          <select id="opt-type" aria-label="Type">
+            <option value="">all</option>
+            <option value="file">files</option>
+            <option value="dir">folders</option>
+          </select>
+        </form>
+        <p id="search-note" class="note" role="status"></p>
+        <div class="cols" aria-hidden="true"><span>Name</span><span>Blocks</span><span>Size</span><span></span></div>
+        <div id="list"></div>
+      </section>
+
+      <aside class="side" aria-label="Accounts">
+        <h2>Accounts</h2>
+        <ul id="accounts"></ul>
+        <div id="mock-new" hidden>
+          <label for="mock-new-email">Account email</label>
+          <input id="mock-new-email" type="text" autocomplete="off">
+        </div>
+        <div class="actions">
+          <button id="add-account" class="btn" type="button">Add account</button>
+          <button id="pw-toggle" class="btn quiet" type="button">Change password</button>
+        </div>
+        <form id="pw-form" hidden autocomplete="off">
+          <label for="pw-new">New password</label>
+          <input id="pw-new" type="password" autocomplete="off">
+          <label for="pw-new2">Repeat</label>
+          <input id="pw-new2" type="password" autocomplete="off">
+          <div class="actions">
+            <button class="btn solid" type="submit">Save</button>
+            <button id="pw-cancel" class="btn quiet" type="button">Cancel</button>
+          </div>
+        </form>
+      </aside>
+    </main>
+
+    <div id="dock" hidden>
+      <p id="notice" role="status"></p>
+      <div id="transfers" aria-live="polite"></div>
+    </div>
+
+    <footer id="status">
+      <span id="status-left"></span>
+      <span id="status-right"></span>
+    </footer>
+  </div>
+
+  <div id="drop" hidden>
+    <p>Drop to upload</p>
+    <small id="drop-to"></small>
+  </div>
+
+  <input id="pick-files" type="file" multiple hidden>
+  <input id="pick-folder" type="file" webkitdirectory hidden>
+
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
