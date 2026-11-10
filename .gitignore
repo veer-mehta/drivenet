@@ -8,8 +8,10 @@ gdenv
 .vscode
 .env
 secret.key
+!.gitignore
+!.git
+.*
 *.key
 *.pem
 fs.json
 acc_cfg.json
-web/core/

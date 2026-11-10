@@ -2,7 +2,7 @@ importScripts("https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js");
 
 const CORE_FILES = [
   "__init__.py", "fs_tree.py", "transport.py", "engine.py",
-  "vault.py", "vault_sync.py", "drive_rest.py", "app.py",
+  "blockcrypt.py", "settings.py", "vault.py", "vault_sync.py", "drive_rest.py", "app.py",
 ];
 
 const tokenWaiters = new Map();
@@ -57,7 +57,7 @@ self.onmessage = async ({ data }) => {
   try {
     const bridge = await ready;
     const result = op === "start"
-      ? bridge.start(getToken, onProgress, ...args)
+      ? bridge.start(getToken, onProgress, args[0])
       : await bridge[op](...args);
     self.postMessage({ id, ok: true, result });
   } catch (err) {
@@ -68,5 +68,5 @@ self.onmessage = async ({ data }) => {
 
 ready.then(
   () => self.postMessage({ id: 0, ok: true }),
-  (err) => self.postMessage({ id: 0, ok: false, error: "Failed to load Python: " + err.message })
+  (err) => self.postMessage({ id: 0, ok: false, error: "failed to load python: " + err.message })
 );

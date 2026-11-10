@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from . import fs_tree
+from . import fs_tree, settings as settings_module
+from .blockcrypt import BlockCipher
 
 MAGIC = "ddv1"
-DEFAULT_N_EXP = 15
-MIN_N_EXP, MAX_N_EXP = 4, 20
+DEFAULT_N_EXP = 17
+MIN_N_EXP, MAX_N_EXP = 4, 18
 SALT_SIZE = 16
 
 
@@ -31,6 +32,10 @@ class VaultCorrupt(VaultError):
 
 
 class VaultLocked(VaultError):
+    pass
+
+
+class VaultStale(VaultLocked):
     pass
 
 
@@ -65,6 +70,9 @@ class Snapshot:
     accounts: list
     fs: dict
     lock: dict
+    pending: dict
+    trash: list
+    settings: dict
 
 
 def _pack(header, contents_token):
@@ -89,39 +97,60 @@ def read_snapshot(master_key, blob):
     header, contents = _unpack(blob)
     try:
         data = json.loads(Fernet(master_key).decrypt(contents.encode("ascii")))
-        return Snapshot(header, int(data["revision"]), list(data["accounts"]), data["fs"], data.get("lock"))
+        return Snapshot(
+            header, int(data["revision"]), list(data["accounts"]), data["fs"], data.get("lock"),
+            dict(data.get("pending") or {}), list(data.get("trash") or []), settings_module.clean(data.get("settings")),
+        )
     except (InvalidToken, ValueError, KeyError, TypeError):
         raise VaultCorrupt("vault contents are damaged") from None
 
 
 class Vault:
-    def __init__(self, master_key, header, accounts, fs, revision=0, lock=None):
+    def __init__(self, master_key, header, accounts, fs, revision=0, lock=None, pending=None, trash=None, settings=None):
         self.master_key = master_key
         self.header = header
         self.accounts = list(accounts)
         self.fs = fs
         self.revision = revision
         self.lock = lock
+        self.pending = pending if pending is not None else {}
+        self.trash = trash if trash is not None else []
+        self.settings = settings if settings is not None else settings_module.clean(None)
+        self.cipher = BlockCipher(master_key)
 
     @classmethod
-    def create(cls, password, accounts=(), master_key=None, n_exp=DEFAULT_N_EXP):
-        master_key = master_key or Fernet.generate_key()
-        Fernet(master_key)
-        return cls(master_key, Header.new(password, master_key, n_exp), accounts, fs_tree.new_fs())
+    def create(cls, password, accounts=()):
+        master_key = Fernet.generate_key()
+        return cls(master_key, Header.new(password, master_key), accounts, fs_tree.new_fs())
 
     @classmethod
     def unlock(cls, password, blob):
         header, _ = _unpack(blob)
         master_key = header.unwrap(password)
         snap = read_snapshot(master_key, blob)
-        return cls(master_key, header, snap.accounts, snap.fs, snap.revision, snap.lock)
+        vault = cls(master_key, header, snap.accounts, snap.fs, snap.revision, snap.lock, snap.pending, snap.trash, snap.settings)
+        if header.n_exp < vault.settings["kdf"]:
+            vault.header = Header.new(password, master_key, vault.settings["kdf"])
+        return vault
 
-    @property
-    def cipher(self):
-        return Fernet(self.master_key)
+    @classmethod
+    def unlock_with_key(cls, master_key, blob):
+        header, _ = _unpack(blob)
+        snap = read_snapshot(master_key, blob)
+        return cls(master_key, header, snap.accounts, snap.fs, snap.revision, snap.lock, snap.pending, snap.trash, snap.settings)
+
+    def adopt(self, snapshot):
+        self.header = snapshot.header
+        self.accounts = list(snapshot.accounts)
+        self.fs = snapshot.fs
+        self.revision = snapshot.revision
+        self.lock = snapshot.lock
+        self.pending = snapshot.pending
+        self.trash = snapshot.trash
+        self.settings = snapshot.settings
 
     def change_password(self, new_password):
-        self.header = Header.new(new_password, self.master_key, self.header.n_exp)
+        self.header = Header.new(new_password, self.master_key, self.settings["kdf"])
 
     def seal(self, revision):
         contents = json.dumps({
@@ -129,6 +158,9 @@ class Vault:
             "accounts": self.accounts,
             "fs": self.fs,
             "lock": self.lock,
+            "pending": self.pending,
+            "trash": self.trash,
+            "settings": self.settings,
         })
         token = Fernet(self.master_key).encrypt(contents.encode("utf-8")).decode("ascii")
         return _pack(self.header, token)

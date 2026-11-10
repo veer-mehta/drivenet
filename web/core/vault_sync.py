@@ -3,31 +3,33 @@ import os
 import time
 
 from .vault import (
-    DEFAULT_N_EXP,
     Vault,
     VaultCorrupt,
     VaultError,
     VaultLocked,
     VaultNotFound,
+    VaultStale,
     WrongPassword,
     read_snapshot,
 )
 
-DEFAULT_LEASE = 90
+LEASE_SECONDS = 90
 
 
 class VaultSync:
-    def __init__(self, storage, clock=time.time, lease=DEFAULT_LEASE):
+    def __init__(self, storage, session=None):
         self.storage = storage
-        self.clock = clock
-        self.lease = lease
-        self.session = os.urandom(8).hex()
+        self.session = session or os.urandom(8).hex()
+        self.mine = ""
+        self._writing = asyncio.Lock()
 
     def _lease(self):
-        return {"owner": self.session, "expires": self.clock() + self.lease}
+        return {"owner": self.session, "expires": time.time() + LEASE_SECONDS}
 
     def _held_by_other(self, lock):
-        return bool(lock) and lock["owner"] != self.session and lock["expires"] > self.clock()
+        if not lock or lock["owner"] == self.session or lock["expires"] <= time.time():
+            return False
+        return not (self.mine and lock["owner"].startswith(self.mine))
 
     async def _read_all(self, accounts):
         results = await asyncio.gather(*(self.storage.read(a) for a in accounts), return_exceptions=True)
@@ -41,24 +43,23 @@ class VaultSync:
             raise VaultError(f"could not read the vault from any account: {errors[0]}")
         return blobs
 
-    async def create(self, password, accounts, master_key=None, n_exp=DEFAULT_N_EXP):
+    async def create(self, password, accounts):
         blobs = await self._read_all(accounts)
         if any(blobs.values()):
             raise VaultError("a vault already exists in one of these accounts")
-        vault = Vault.create(password, accounts, master_key, n_exp)
+        vault = Vault.create(password, accounts)
         await self._commit(vault, self._lease())
         return vault
 
-    async def open(self, password, accounts):
+    async def _open(self, accounts, opener, mismatch=None):
         blobs = await self._read_all(accounts)
         found = sorted({blob for blob in blobs.values() if blob})
         if not found:
             raise VaultNotFound("no vault found in these accounts")
-
         unlocked, wrong_password, corrupt = [], False, None
         for blob in found:
             try:
-                unlocked.append(Vault.unlock(password, blob))
+                unlocked.append(opener(blob))
             except WrongPassword:
                 wrong_password = True
             except VaultCorrupt as exc:
@@ -66,13 +67,42 @@ class VaultSync:
         if not unlocked:
             if wrong_password:
                 raise WrongPassword("wrong password")
-            raise corrupt
+            raise mismatch or corrupt
+        return max(unlocked, key=lambda v: v.revision)
 
-        vault = max(unlocked, key=lambda v: v.revision)
-        if self._held_by_other(vault.lock):
-            wait = int(vault.lock["expires"] - self.clock()) + 1
-            raise VaultLocked(f"the vault is open in another session. try again in {wait}s")
-        await self._commit(vault, self._lease())
+    async def unlock(self, password, accounts):
+        return await self._open(accounts, lambda blob: Vault.unlock(password, blob))
+
+    async def unlock_with_key(self, master_key, accounts):
+        return await self._open(
+            accounts, lambda blob: Vault.unlock_with_key(master_key, blob),
+            WrongPassword("the saved session no longer matches this vault"),
+        )
+
+    def _busy(self, lock):
+        wait = int(lock["expires"] - time.time()) + 1
+        return VaultLocked(f"the vault is open in another session. try again in {wait}s")
+
+    async def begin(self, vault, mine=""):
+        self.mine = mine or ""
+        for attempt in range(3):
+            newest = await self._newest(vault)
+            if newest is not None and newest.revision > vault.revision:
+                if self._held_by_other(newest.lock):
+                    raise self._busy(newest.lock)
+                vault.adopt(newest)
+            elif self._held_by_other(vault.lock):
+                raise self._busy(vault.lock)
+            try:
+                await self._commit(vault, self._lease())
+                return
+            except VaultLocked:
+                if attempt == 2:
+                    raise
+
+    async def open(self, password, accounts):
+        vault = await self.unlock(password, accounts)
+        await self.begin(vault)
         return vault
 
     async def save(self, vault):
@@ -103,8 +133,16 @@ class VaultSync:
         return written, [a for a in accounts if a not in written]
 
     async def _commit(self, vault, lock):
+        async with self._writing:
+            return await self._write_version(vault, lock)
+
+    async def _write_version(self, vault, lock):
         newest = await self._newest(vault)
-        if newest is not None and newest.revision != vault.revision:
+        if newest is not None and newest.revision > vault.revision:
+            if not self._held_by_other(newest.lock):
+                raise VaultStale(
+                    "another account holds a newer copy of the vault. lock, then sign in again with every account connected"
+                )
             raise VaultLocked("the vault was taken over by another session")
 
         revision = vault.revision + 1
@@ -113,7 +151,7 @@ class VaultSync:
         written, failed = await self._write_all(vault.accounts, blob)
 
         readbacks = await asyncio.gather(*(self.storage.read(a) for a in written), return_exceptions=True)
-        if any(r != blob for r in readbacks if not isinstance(r, BaseException)):
+        if any(r is not None and r != blob for r in readbacks if not isinstance(r, BaseException)):
             raise VaultLocked("another session saved at the same moment")
 
         vault.revision = revision

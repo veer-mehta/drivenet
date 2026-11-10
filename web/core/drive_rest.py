@@ -9,6 +9,27 @@ from .transport import VAULT_FILENAME, DriveTransport, VaultStorage
 API_BASE = "https://www.googleapis.com"
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 ATTEMPTS = 4
+RETRY_DELAY = 0.5
+
+
+HINTS = {
+    "accessNotConfigured": "enable the Google Drive API for this project in Google Cloud Console",
+    "insufficientPermissions": "sign in again and allow the Drive app data permission",
+    "authError": "the Google session expired. reconnect the account",
+}
+
+
+def describe(raw):
+    try:
+        error = json.loads(raw)["error"]
+        if not isinstance(error, dict):
+            return str(error)
+        reason = ((error.get("errors") or [{}])[0]).get("reason") or error.get("status") or ""
+        message = error.get("message") or "request failed"
+        hint = HINTS.get(reason)
+        return f"{message} [{reason}]" + (f". fix: {hint}" if hint else "") if reason else message
+    except (ValueError, KeyError, TypeError, IndexError):
+        return raw[:200].decode("utf-8", "replace")
 
 
 class DriveError(Exception):
@@ -28,14 +49,12 @@ def multipart(metadata, data, content_type):
 
 
 class DriveApi:
-    def __init__(self, get_token, fetch, base=API_BASE, retry_delay=0.5):
+    def __init__(self, get_token, fetch):
         self.get_token = get_token
         self.fetch = fetch
-        self.base = base
-        self.retry_delay = retry_delay
 
     async def call(self, account, method, path, params=None, headers=None, body=None, accept=(200,)):
-        url = self.base + path + ("?" + urlencode(params) if params else "")
+        url = API_BASE + path + ("?" + urlencode(params) if params else "")
         for attempt in range(ATTEMPTS):
             token = self.get_token(account)
             if inspect.isawaitable(token):
@@ -44,9 +63,9 @@ class DriveApi:
             if status in accept:
                 return status, data
             if status in RETRY_STATUSES and attempt < ATTEMPTS - 1:
-                await asyncio.sleep(self.retry_delay * 2 ** attempt)
+                await asyncio.sleep(RETRY_DELAY * 2 ** attempt)
                 continue
-            raise DriveError(status, data[:200].decode("utf-8", "replace"))
+            raise DriveError(status, describe(data))
 
 
 class FetchTransport(DriveTransport):
@@ -69,18 +88,43 @@ class FetchTransport(DriveTransport):
     async def delete(self, account, drive_id):
         await self.api.call(account, "DELETE", f"/drive/v3/files/{quote(drive_id)}", accept=(200, 204, 404))
 
+    async def list_chunks(self, account):
+        ids, token = [], None
+        while True:
+            params = {
+                "spaces": "appDataFolder",
+                "q": "appProperties has { key='type' and value='chunk' }",
+                "fields": "nextPageToken,files(id)",
+                "pageSize": "1000",
+            }
+            if token:
+                params["pageToken"] = token
+            _, raw = await self.api.call(account, "GET", "/drive/v3/files", params)
+            page = json.loads(raw)
+            ids += [f["id"] for f in page.get("files", [])]
+            token = page.get("nextPageToken")
+            if not token:
+                return ids
+
 
 class FetchVaultStorage(VaultStorage):
     def __init__(self, api):
         self.api = api
 
-    async def _find(self, account):
+    async def _find_all(self, account):
         _, raw = await self.api.call(
             account, "GET", "/drive/v3/files",
             {"spaces": "appDataFolder", "q": f"name = '{VAULT_FILENAME}'", "fields": "files(id)", "orderBy": "createdTime"},
         )
-        files = json.loads(raw)["files"]
-        return files[0]["id"] if files else None
+        return [f["id"] for f in json.loads(raw)["files"]]
+
+    async def _find(self, account):
+        ids = await self._find_all(account)
+        return ids[0] if ids else None
+
+    async def delete(self, account):
+        for file_id in await self._find_all(account):
+            await self.api.call(account, "DELETE", f"/drive/v3/files/{quote(file_id)}", accept=(200, 204, 404))
 
     async def read(self, account):
         file_id = await self._find(account)

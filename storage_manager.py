@@ -1,395 +1,199 @@
-import concurrent.futures
-import io
-import json
+import asyncio
 import os
-import time
+import sys
+import threading
+import urllib.error
+import urllib.request
 
-from cryptography.fernet import Fernet
-from dotenv import load_dotenv
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "web"))
 
-load_dotenv()
-KEY_FILE = str(os.getenv("KEY_FILE"))
-BLOCK_SIZE = int(eval(os.getenv("BLOCK_SIZE", "5 * 1024 * 1024")))
-THREADS_PER_ACCOUNT = int(os.getenv("THREADS_PER_ACCOUNT", 5))
+from core import fs_tree
+from core.app import App
+from core.engine import LEGACY_BLOCK_SIZE, StorageError
+from core.vault import VaultError, VaultLocked, VaultNotFound, WrongPassword
+
+HEARTBEAT_SECONDS = 30
+
+__all__ = ["Session", "StorageError", "VaultError", "VaultLocked", "VaultNotFound", "WrongPassword"]
 
 
-class StorageManager:
-    def __init__(self, accs, fs_path="fs.json"):
-        self.cipher = self._get_cipher()
-        self.fs_path = fs_path
-        self.fs = self._load_json(self.fs_path)
-        self.cached_workers = {}
-        self.accs = accs
+def _request(method, url, headers, body):
+    request = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
 
-    def _get_cipher(self):
-        if os.path.exists(KEY_FILE):
-            key = open(KEY_FILE, "rb").read()
-        else:
-            key = Fernet.generate_key()
-            open(KEY_FILE, "wb").write(key)
-        return Fernet(key)
 
-    def _load_json(self, path):
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print("warning: failed to load json with error: ", e)
-            print("creating new fs.json")
-            fs = {"root": {"type": "dir", "children": {}}}
-            self._save_json(fs)
-            return fs
+async def _fetch(method, url, headers, body):
+    return await asyncio.to_thread(_request, method, url, headers, body)
 
-    def _save_json(self, data):
-        with open(self.fs_path, "w") as f:
-            json.dump(data, f, indent=4)
 
-    def _get_service(self, creds, acc_name):
-        if acc_name not in self.cached_workers:
-            self.cached_workers[acc_name] = build("drive", "v3", credentials=creds)
-        return self.cached_workers[acc_name]
+def _progress_printer(label):
+    def show(done, total, idx):
+        end = "\n" if done == total else "\r"
+        print(f"  {label}: {done}/{total} blocks", end=end, flush=True)
 
-    def _upload_chunk_task(self, creds, local_path, byte_offset, remote_name, chunk_idx, acc_name):
-        try:
-            with open(local_path, "rb") as f:
-                f.seek(byte_offset)
-                chunk_data = f.read(BLOCK_SIZE)
+    return show
 
-            encrypted_chunk = self.cipher.encrypt(chunk_data)
 
-            service = self._get_service(creds, acc_name)
-            file_metadata = {
-                "name": f"{remote_name}.chunk{chunk_idx}",
-                "appProperties": {"type": "chunk", "order": str(chunk_idx)},
-            }
+class Session:
+    def __init__(self, token_for):
+        self.loop = asyncio.new_event_loop()
+        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+        self.app = App(token_for, _fetch)
+        self.beating = None
 
-            media = MediaIoBaseUpload(
-                io.BytesIO(encrypted_chunk),
-                mimetype="application/octet-stream",
-                resumable=False,
-            )
-            drive_file = (
-                service.files()
-                .create(body=file_metadata, media_body=media, fields="id")
-                .execute()
-            )
+    def _run(self, coroutine):
+        return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result()
 
-            return {
-                "drive_id": drive_file.get("id"),
-                "idx": str(chunk_idx),
-                "acc_name": acc_name,
-            }
-        except Exception as e:
-            print(f"failed: chunk {chunk_idx}: {e}")
-            return None
+    async def _beat(self):
+        while True:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            try:
+                await self.app.renew()
+            except Exception as error:
+                print(f"\nwarning: could not renew the vault lock: {error}")
+
+    def _start_heartbeat(self):
+        self.beating = asyncio.run_coroutine_threadsafe(self._beat(), self.loop)
+
+    def open(self, password, accounts, begin=True):
+        self._run(self.app.unlock(password, accounts))
+        if begin:
+            self.begin()
+
+    def begin(self):
+        self._run(self.app.begin())
+        self._start_heartbeat()
+
+    def create(self, password, accounts):
+        self._run(self.app.create(password, accounts))
+        self._start_heartbeat()
+
+    def close(self):
+        if self.beating:
+            self.beating.cancel()
+        if self.app.vault is not None:
+            self._run(self.app.release())
+
+    def state(self):
+        return self.app.state()
+
+    def tree_lines(self):
+        lines = ["root"]
+
+        def walk(node, prefix):
+            names = list(node["children"])
+            for index, name in enumerate(names):
+                child = node["children"][name]
+                last = index == len(names) - 1
+                lines.append(prefix + ("└── " if last else "├── ") + name + ("/" if child["type"] == "dir" else ""))
+                if child["type"] == "dir":
+                    walk(child, prefix + ("    " if last else "│   "))
+
+        walk(self.state()["tree"], "")
+        return lines
+
+    def search(self, query, exact=False, use_regex=False, filter_type=None):
+        return self.app.search(query, exact, use_regex, filter_type)
 
     def upload_file(self, local_path, remote_path):
-        if not self.accs:
-            return False
+        if not os.path.isfile(local_path):
+            raise StorageError(f"local file not found: {local_path}")
+        if not remote_path or remote_path.endswith("/"):
+            remote_path += os.path.basename(local_path)
+        size = os.path.getsize(local_path)
+        stamp = int(os.path.getmtime(local_path) * 1000)
+        with open(local_path, "rb") as source:
+            def read_at(offset, count):
+                source.seek(offset)
+                return source.read(count)
 
-        if not remote_path or remote_path[-1] == "/":
-            remote_path += local_path
-        if remote_path[0] != "/":
-            remote_path = "/" + remote_path
+            self._run(self.app.upload(read_at, size, remote_path, _progress_printer(os.path.basename(local_path)), stamp))
 
-        num_accs = len(self.accs)
-        file_size = os.path.getsize(local_path)
-        total_chunks = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-        remote_dir, remote_name = remote_path.rsplit("/", 1)
+    def upload_folder(self, local_dir, remote_dir):
+        if not os.path.isdir(local_dir):
+            raise StorageError(f"local folder not found: {local_dir}")
+        remote_dir = (remote_dir or os.path.basename(local_dir.rstrip("/\\"))).rstrip("/")
+        count = 0
+        for root, _, names in os.walk(local_dir):
+            relative = os.path.relpath(root, local_dir).replace(os.sep, "/")
+            for name in sorted(names):
+                target = remote_dir + ("" if relative == "." else "/" + relative) + "/" + name
+                self.upload_file(os.path.join(root, name), target)
+                count += 1
+        return count
 
-        print(f"{remote_name}: {total_chunks} chunks")
-        chunks_info = [(None, None)] * total_chunks
+    def download_file(self, remote_path, local_path):
+        local_path = local_path or os.path.basename(remote_path)
+        folder = os.path.dirname(local_path)
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        node = fs_tree.get_node(self.app.vault.fs, fs_tree.normalize(remote_path))
+        if node is None or node.get("type") != "file":
+            raise StorageError(f"not a file: {remote_path}")
+        block_size = node.get("block_size", LEGACY_BLOCK_SIZE)
+        version = str(node.get("fid") or node.get("timestamp"))
+        partial, marker = local_path + ".part", local_path + ".part.id"
+        start = 0
+        if os.path.exists(partial) and os.path.exists(marker) and open(marker).read() == version:
+            start = os.path.getsize(partial) // block_size
+        with open(marker, "w") as handle:
+            handle.write(version)
+        with open(partial, "r+b" if start else "wb") as target:
+            target.seek(start * block_size)
+            target.truncate()
+            if start:
+                print(f"  continuing from block {start + 1}")
+            self._run(self.app.download(
+                remote_path, target.write, _progress_printer(os.path.basename(remote_path)), start,
+            ))
+        os.replace(partial, local_path)
+        os.remove(marker)
 
-        workers = num_accs * THREADS_PER_ACCOUNT
-        completed = 0
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            upload_tasks = []
-
-            acc_names = list(self.accs.keys())
-
-            for chunk_idx in range(total_chunks):
-                acc_name = acc_names[chunk_idx % num_accs]
-                creds = self.accs[acc_name]["creds"]
-
-                byte_offset = chunk_idx * BLOCK_SIZE
-
-                upload_tasks.append(executor.submit(self._upload_chunk_task, creds, local_path, byte_offset, remote_name, chunk_idx, acc_name))
-
-            for future in concurrent.futures.as_completed(upload_tasks):
-                res = future.result()
-                if res:
-                    chunks_info[int(res["idx"])] = (res["drive_id"], res["acc_name"])
-                    completed += 1
-                    print(completed, "/", total_chunks, "uploaded")
-
-        if None in chunks_info:
-            print("some chunks failed")
-            return False
-
-        node = self.fs["root"]
-        for dir in filter(None, remote_dir.split("/")):
-            node = node["children"].setdefault(dir, {"type": "dir", "children": {}})
-
-        node["children"][remote_name] = {
-            "type": "file",
-            "name": remote_name,
-            "size": file_size,
-            "chunks": chunks_info,
-            "timestamp": time.time(),
-        }
-
-        self._save_json(self.fs)
-        return True
-
-    def upload_folder(self, local_path, remote_path):
-        if not remote_path:
-            remote_path = local_path
-        if remote_path[0] != "/":
-            remote_path = "/" + remote_path
-
-        for name in os.listdir(local_path):
-            path = os.path.join(local_path, name)
-            print(local_path, name, path, remote_path)
-
-            if os.path.isfile(path):
-                self.upload_file(path, os.path.join(remote_path, name))
-            else:
-                self.upload_folder(path, os.path.join(remote_path, name))
-
-        return True
-
-    def _download_chunk_task(self, creds, chunk_idx, drive_id, acc_name):
-        try:
-            service = self._get_service(creds, acc_name)
-            request = service.files().get_media(fileId=drive_id)
-
-            chunk_buffer = io.BytesIO()
-            downloader = MediaIoBaseDownload(chunk_buffer, request)
-            done = False
-            while done is False:
-                _, done = downloader.next_chunk()
-
-            decr_data = self.cipher.decrypt(chunk_buffer.getvalue())
-            return {"idx": chunk_idx, "data": decr_data}
-
-        except Exception as e:
-            print(f"failed: chunk {chunk_idx}: {e}")
-            return None
-
-    def download_file(self, local_path, remote_path):
-
-        if not local_path:
-            local_path = remote_path
-        if remote_path[0] != "/":
-            remote_path = "/" + remote_path
-
-        remote_dir, remote_file = remote_path.rsplit("/", 1)
-
-        node = self.fs["root"]
-        for dir in filter(None, remote_dir.split("/")):
-            if dir not in node["children"]:
-                return False
-
-            node = node["children"][dir]
-
-        file = node["children"][remote_file]
-        if not file:
-            return False
-
-        num_chunks = len(file["chunks"])
-        print(f"fetching {num_chunks} chunks({file['size']})")
-
-        chunk_data_map = [b""] * num_chunks
-        completed = 0
-        workers = THREADS_PER_ACCOUNT * len(self.accs)
-
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                download_tasks = []
-
-                for chunk_idx in range(num_chunks):
-                    chunk = file["chunks"][chunk_idx]
-                    creds = self.accs[chunk[1]]["creds"]
-                    download_tasks.append(
-                        executor.submit(
-                            self._download_chunk_task,
-                            creds,
-                            chunk_idx,
-                            chunk[0],
-                            chunk[1],
-                        )
-                    )
-
-                for future in concurrent.futures.as_completed(download_tasks):
-                    res = future.result()
-                    if res:
-                        chunk_data_map[res["idx"]] = res["data"]
-                        completed += 1
-                        print(completed, "/", num_chunks, "downloaded")
-
-            if None in chunk_data_map:
-                print("failed to retrieve all chunks")
-                return False
-
-            with open(local_path, "wb") as output_f:
-                for data in chunk_data_map:
-                    output_f.write(data)
-
-            print("reassembled successfully")
-            return True
-
-        except Exception as e:
-            print(f"error downloading: {e}")
-            return False
-
-    def download_folder(self, local_path, remote_path):
-        if not local_path:
-            local_path = remote_path
-        if remote_path[0] != "/":
-            remote_path = "/" + remote_path
-
-        node = self.fs["root"]
-        for dir in filter(None, remote_path.split("/")):
-            if dir not in node["children"]:
-                return False
-            node = node["children"][dir]
-
-        dir = node["children"]
-        os.makedirs(local_path, exist_ok=True)
-
-        for name in dir:
-            path = os.path.join(remote_path, name)
-            print(local_path, name, path, remote_path)
-
-            if dir[name]["type"] == "file":
-                self.download_file(os.path.join(local_path, name), path)
-            else:
-                self.download_folder(os.path.join(local_path, name), path)
-
-        return True
-
-    def _delete_chunk_task(self, creds, drive_id, chunk_idx, acc_name):
-        try:
-            service = self._get_service(creds, acc_name)
-            service.files().delete(fileId=drive_id).execute()
-            return chunk_idx
-        except Exception:
-            return None
+    def download_folder(self, remote_path, local_dir):
+        remote_path = fs_tree.normalize(remote_path)
+        node = fs_tree.get_node(self.app.vault.fs, remote_path)
+        if node is None or node["type"] != "dir":
+            raise StorageError(f"not a folder: {remote_path}")
+        base = remote_path.rstrip("/")
+        root = os.path.realpath(local_dir)
+        targets = []
+        for path, _ in fs_tree.iter_files(node, base):
+            target = os.path.join(local_dir, *path[len(base):].strip("/").split("/"))
+            try:
+                inside = os.path.commonpath([os.path.realpath(target), root]) == root
+            except ValueError:
+                inside = False
+            if not inside:
+                raise StorageError(f"refusing to write outside {local_dir}: {path}")
+            targets.append((path, target))
+        for path, target in targets:
+            self.download_file(path, target)
+        return len(targets)
 
     def delete_file(self, remote_path):
-
-        if remote_path == "":
-            return False
-        if remote_path[0] != "/":
-            remote_path = "/" + remote_path
-
-        remote_dir, remote_file = remote_path.rsplit("/", 1)
-
-        node = self.fs["root"]
-        for dir in filter(None, remote_dir.split("/")):
-            if dir not in node["children"]:
-                return False
-
-            node = node["children"][dir]
-
-        if remote_file not in node["children"]:
-            return False
-
-        parent = node
-        node = node["children"][remote_file]
-
-        if node["type"] != "file":
-            return False
-
-        chunks = node["chunks"]
-        num_chunks = len(chunks)
-
-        print(f"deleting {num_chunks} chunks from drive...")
-        completed = 0
-        workers = THREADS_PER_ACCOUNT * len(self.accs)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            delete_tasks = []
-            for chunk in chunks:
-                acc_name = chunk[1]
-                if acc_name in self.accs:
-                    creds = self.accs[acc_name]["creds"]
-                    delete_tasks.append(
-                        executor.submit(
-                            self._delete_chunk_task,
-                            creds,
-                            chunk[0],
-                            chunk[1],
-                            acc_name,
-                        )
-                    )
-
-            for future in concurrent.futures.as_completed(delete_tasks):
-                res = future.result()
-                print(res)
-                if res is not None:
-                    completed += 1
-                    print(completed, "/", num_chunks, "deleted")
-
-        del parent["children"][remote_file]
-
-        self._save_json(self.fs)
-        return True
+        self._run(self.app.delete_file(remote_path, _progress_printer("deleting")))
 
     def delete_folder(self, remote_path):
+        self._run(self.app.delete_folder(remote_path, _progress_printer("deleting")))
 
-        if remote_path == "":
-            return False
-        if remote_path[0] != "/":
-            remote_path = "/" + remote_path
+    def add_account(self, email):
+        self._run(self.app.add_account(email))
 
-        remote_dir, folder_name = remote_path.rsplit("/", 1)
-        node = self.fs["root"]
+    def remove_account(self, email):
+        self._run(self.app.remove_account(email))
 
-        for dir in filter(None, remote_dir.split("/")):
-            if dir not in node["children"]:
-                return False
+    def change_password(self, password):
+        self._run(self.app.change_password(password))
 
-            node = node["children"][dir]
+    def set_settings(self, values):
+        self._run(self.app.set_settings(values))
 
-        if folder_name not in node["children"]:
-            return False
+    def discard_upload(self, remote_path):
+        self._run(self.app.discard_upload(remote_path))
 
-        parent = node
-        node = node["children"][folder_name]
-
-        if node["type"] != "dir":
-            return False
-
-        dir = list(node["children"].items())
-
-        for name, child in dir:
-            path = f"{remote_path}/{name}"
-
-            if child["type"] == "file":
-                self.delete_file(path)
-            else:
-                self.delete_folder(path)
-
-        del parent["children"][folder_name]
-        self._save_json(self.fs)
-
-        return True
-
-    def print_fs_tree(self):
-        def walk(node, prefix=""):
-            children = list(node["children"].items())
-
-            for i, (name, child) in enumerate(children):
-                is_last = i == len(children) - 1
-
-                print(prefix + ("└── " if is_last else "├── ") + name)
-
-                if child["type"] == "dir":
-                    walk(child, prefix + ("    " if is_last else "│   "))
-
-        print("\nroot")
-        walk(self.fs["root"])
+    def clean_orphans(self):
+        return self._run(self.app.clean_orphans())

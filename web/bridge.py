@@ -22,10 +22,10 @@ def _progress(done, total, idx=-1):
     report(done, total, idx)
 
 
-def start(get_token, on_progress, api_base):
+def start(get_token, on_progress, session_id=None):
     global session, report
     report = on_progress
-    session = App(get_token, fetch, api_base)
+    session = App(get_token, fetch, session_id or None)
 
 
 async def create(password, accounts_json):
@@ -33,7 +33,23 @@ async def create(password, accounts_json):
 
 
 async def open_vault(password, accounts_json):
-    await session.open(password, json.loads(accounts_json))
+    await session.unlock(password, json.loads(accounts_json))
+
+
+async def open_with_key(key, accounts_json):
+    await session.unlock_key(key, json.loads(accounts_json))
+
+
+def export_key():
+    return session.export_key()
+
+
+async def begin_session(mine=""):
+    await session.begin(mine or "")
+
+
+def abandon():
+    session.abandon()
 
 
 async def release():
@@ -57,7 +73,7 @@ async def upload(file, remote_path):
         buffer = await file.slice(offset, offset + n).arrayBuffer()
         return buffer.to_bytes()
 
-    await session.upload(read_at, int(file.size), remote_path, _progress)
+    await session.upload(read_at, int(file.size), remote_path, _progress, int(file.lastModified))
 
 
 async def download(remote_path):
@@ -91,3 +107,15 @@ async def remove_account(email):
 
 def search(query, exact, use_regex, filter_type):
     return json.dumps(session.search(query, exact, use_regex, filter_type or None))
+
+
+async def set_settings(values_json):
+    await session.set_settings(json.loads(values_json))
+
+
+async def discard_upload(remote_path):
+    await session.discard_upload(remote_path)
+
+
+async def clean_orphans():
+    return await session.clean_orphans()

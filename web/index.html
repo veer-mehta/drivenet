@@ -1,146 +1,302 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#000000">
-  <title>drivenet</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <div id="boot" class="center">
-    <p class="dim">starting<span class="caret"></span></p>
-  </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0c0c0c" />
+    <title>drivenet</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M3 7h18M3 12h18M3 17h18"/><rect x="14" y="4.5" width="4" height="5" class="knob"/><rect x="6" y="9.5" width="4" height="5" class="knob"/><rect x="12" y="14.5" width="4" height="5" class="knob"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M17 12v3M20 12v2"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7v13h12V7M10 11v6M14 11v6"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V5M7 9l5-5 5 5M5 20h14"/></symbol>
+      <symbol id="i-folder-up" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v12H3zM12 17v-6M9 14l3-3 3 3"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0zM12 18v3"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M16 16l5 5"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v12H3z"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V6M6 11l6-6 6 6"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4M4 4v4h4M4 13a8 8 0 0 0 14 4M20 20v-4h-4"/></symbol>
+    </svg>
 
-  <section id="gate" class="center" hidden>
-    <h1 class="mark">drivenet<span class="caret"></span></h1>
-
-    <div id="setup" hidden>
-      <p class="lead">Google sign-in isn't set up yet.</p>
-      <ol>
-        <li>In <code>console.cloud.google.com</code>, create a project and enable the Google Drive API.</li>
-        <li>On the OAuth consent screen choose External, add yourself as a test user, and add the scope <code>.../auth/drive.appdata</code>.</li>
-        <li>Create an OAuth client ID of type Web application.</li>
-        <li>Add <code id="origin"></code> as an authorized JavaScript origin.</li>
-        <li>Paste the client ID into <code>web/config.js</code> and reload.</li>
+    <div id="boot" class="narrow" role="status" aria-label="loading">
+      <h1 class="mark" aria-label="drivenet">
+        <span class="logo"></span>rive<span class="net">net</span>
+      </h1>
+      <ol id="boot-steps">
+        <li class="active"><i></i>python runtime</li>
+        <li><i></i>crypto library</li>
+        <li><i></i>vault engine</li>
       </ol>
     </div>
 
-    <div id="signin" hidden>
-      <div id="mock-box" hidden>
-        <label for="mock-email">Account email</label>
-        <input id="mock-email" type="text" autocomplete="off">
-      </div>
-      <div class="actions">
-        <button id="google" class="btn solid" type="button">Sign in with Google</button>
-      </div>
-    </div>
+    <section id="gate" class="narrow" hidden>
+      <h1 class="mark" aria-label="drivenet">
+        <span class="logo"></span>rive<span class="net">net</span>
+      </h1>
 
-    <div id="own-id" hidden>
-      <p id="own-id-state" class="dim"></p>
-      <button id="own-id-toggle" class="btn quiet" type="button">Use your own client ID</button>
-      <form id="own-id-form" hidden autocomplete="off">
-        <label for="own-id-input">Google OAuth client ID</label>
-        <input id="own-id-input" type="text" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off">
+      <div id="demo" aria-hidden="true"></div>
+
+      <div id="about">
+        <p>
+          everything above happens in your browser. this site stores nothing and
+          only serves this page.
+        </p>
+      </div>
+
+      <div id="signin" hidden>
+        <button id="google" class="btn solid" type="button">
+          sign in with google
+        </button>
+      </div>
+
+      <div id="own-id" hidden>
+        <div class="own-row">
+          <span id="own-id-state" class="dim"></span>
+          <button id="own-id-toggle" class="btn" type="button"></button>
+          <button id="own-id-reset" class="btn" type="button">
+            use default
+          </button>
+        </div>
+        <form id="own-id-form" class="kv" hidden autocomplete="off">
+          <span class="k">why</span>
+          <p class="dim">
+            sign-in goes through a google project.
+            <span id="why-default">the default one only handles sign-in. </span
+            >make your own to not depend on it. your vault belongs to the
+            project it was created with, so keep using the same one.
+          </p>
+          <span class="k">steps</span>
+          <ol class="steps">
+            <li>
+              open <code>console.cloud.google.com</code>, create a project and
+              enable the <b>google drive api</b>.
+            </li>
+            <li>
+              on the oauth consent screen choose <b>external</b>, add yourself
+              as a test user and add the scope
+              <code>.../auth/drive.appdata</code>.
+            </li>
+            <li>
+              under credentials, create an <b>oauth client id</b> of type
+              <b>web application</b>.
+            </li>
+            <li>
+              add <code id="origin"></code> as an authorized javascript origin.
+            </li>
+          </ol>
+          <label class="k" for="own-id-input">client id</label>
+          <input
+            id="own-id-input"
+            type="text"
+            placeholder="1234-abc.apps.googleusercontent.com"
+            autocomplete="off"
+          />
+          <span></span>
+          <div class="actions">
+            <button class="btn solid" type="submit">save</button>
+          </div>
+          <span></span>
+          <p id="owner-note" class="dim" hidden>
+            running this site yourself? set <code>GOOGLE_CLIENT_ID</code> in
+            <code>.env</code> and this step goes away.
+          </p>
+        </form>
+      </div>
+
+      <form id="unlock" class="kv" hidden autocomplete="off">
+        <span class="k">account</span>
+        <b id="who"></b>
+        <label class="k" for="password">password</label>
+        <input id="password" type="password" autocomplete="off" />
+        <div id="repeat-box" hidden>
+          <label class="k" for="password2">repeat</label>
+          <input id="password2" type="password" autocomplete="off" />
+          <span></span>
+          <p class="warn">
+            there is no password recovery. forget it and the files are gone.
+          </p>
+        </div>
+        <span></span>
         <div class="actions">
-          <button class="btn solid" type="submit">Save</button>
-          <button id="own-id-reset" class="btn quiet" type="button">Use default</button>
+          <button id="unlock-btn" class="btn solid" type="submit">
+            unlock vault
+          </button>
+          <button id="resume" class="btn solid" type="button" hidden>continue with google</button>
+          <button id="use-password" class="btn quiet" type="button" hidden>use password instead</button>
+          <button id="mode" class="btn quiet" type="button">
+            create vault
+          </button>
+          <button id="switch" class="btn quiet" type="button">logout</button>
         </div>
       </form>
-    </div>
 
-    <form id="unlock" hidden autocomplete="off">
-      <p class="dim">Signed in as <b id="who"></b></p>
-      <label for="password">Vault password</label>
-      <input id="password" type="password" autocomplete="off">
-      <div id="repeat-box" hidden>
-        <label for="password2">Repeat password</label>
-        <input id="password2" type="password" autocomplete="off">
-        <p class="warn">There is no password recovery. Forget it and the files are gone.</p>
-      </div>
+      <form id="connect-step" class="kv" hidden>
+      <span class="k">connect</span>
+      <p class="dim">this vault keeps a copy in more than one account. connect the others so every copy stays up to date.</p>
+      <span></span>
+      <div id="missing"></div>
+      <span></span>
       <div class="actions">
-        <button id="unlock-btn" class="btn solid" type="submit">Unlock</button>
-        <button id="mode" class="btn" type="button">New vault</button>
-        <button id="switch" class="btn quiet" type="button">Other account</button>
+        <button id="connect-skip" class="btn quiet" type="button">continue without them</button>
+        <button id="connect-cancel" class="btn quiet" type="button">cancel</button>
       </div>
     </form>
 
-    <p id="gate-note" class="note" role="status"></p>
-  </section>
+    <p id="gate-busy" class="busy-line" role="status" hidden><span id="busy-text"></span><i class="cursor" aria-hidden="true"></i></p>
 
-  <div id="app" hidden>
-    <header class="top">
-      <h1 class="mark">drivenet<span class="caret"></span></h1>
-      <nav id="path" aria-label="Folder"></nav>
-      <div class="tools">
-        <button id="up-files" class="btn" type="button">Upload files</button>
-        <button id="up-folder" class="btn" type="button">Upload folder</button>
-        <button id="lock" class="btn quiet" type="button">Lock</button>
+      <p id="gate-note" class="note" role="status"></p>
+    </section>
+
+        <div id="app" hidden>
+      <header class="top">
+        <h1 class="mark" aria-label="drivenet">
+          <span class="logo"></span>rive<span class="net">net</span>
+        </h1>
+        <nav class="who" aria-label="account">
+          <span id="top-email" class="chip"></span>
+          <button id="settings-toggle" class="icon-btn" type="button" title="settings" aria-label="settings"><svg class="ico" aria-hidden="true"><use href="#i-settings"></use></svg></button>
+          <button id="lock" class="icon-btn" type="button" title="lock vault" aria-label="lock vault"><svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg></button>
+        </nav>
+      </header>
+
+      <div class="shell">
+        <aside id="side">
+          <section class="vault" aria-label="vault">
+            <b id="st-stored" class="big">0 B</b>
+            <p id="st-sub" class="sub"></p>
+            <div id="map" aria-hidden="true"></div>
+            <p id="map-note" class="dim"></p>
+          </section>
+
+          <section id="pool" aria-label="drives">
+            <div class="section-head">
+              <h2>drives</h2>
+              <div class="section-tools">
+                <button id="add-account" class="icon-btn" type="button" title="add account" aria-label="add account"><svg class="ico" aria-hidden="true"><use href="#i-plus"></use></svg></button>
+                <button id="pw-toggle" class="icon-btn" type="button" title="change password" aria-label="change password"><svg class="ico" aria-hidden="true"><use href="#i-key"></use></svg></button>
+              </div>
+            </div>
+            <ul id="accounts"></ul>
+            <form id="pw-form" hidden autocomplete="off">
+              <label for="pw-new">new password</label>
+              <input id="pw-new" type="password" autocomplete="off" />
+              <label for="pw-new2">repeat</label>
+              <input id="pw-new2" type="password" autocomplete="off" />
+              <div class="actions">
+                <button class="btn solid" type="submit">save</button>
+                <button id="pw-cancel" class="btn quiet" type="button">cancel</button>
+              </div>
+            </form>
+          </section>
+        </aside>
+
+        <main id="main">
+          <section class="files" aria-label="files">
+            <div class="toolbar">
+              <nav id="path" aria-label="folder"></nav>
+              <div class="tools">
+                <button id="up-files" class="btn with-ico" type="button"><svg class="ico" aria-hidden="true"><use href="#i-upload"></use></svg>upload files</button>
+                <button id="up-folder" class="btn with-ico" type="button"><svg class="ico" aria-hidden="true"><use href="#i-folder-up"></use></svg>upload folder</button>
+              </div>
+            </div>
+            <div id="unfinished" hidden></div>
+            <form id="search" class="search" role="search">
+              <div class="field">
+                <svg class="ico" aria-hidden="true"><use href="#i-search"></use></svg>
+                <input id="q" type="text" placeholder="search" aria-label="search" autocomplete="off" />
+              </div>
+              <label class="check"><input id="opt-exact" type="checkbox" /> exact</label>
+              <label class="check"><input id="opt-regex" type="checkbox" /> regex</label>
+              <div class="select" id="opt-type" data-value="">
+                <button class="select-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="type">
+                  <span class="select-label">all</span>
+                </button>
+                <ul class="select-list" role="listbox" aria-label="type" hidden>
+                  <li role="option" data-value="" aria-selected="true">all</li>
+                  <li role="option" data-value="file" aria-selected="false">files</li>
+                  <li role="option" data-value="dir" aria-selected="false">folders</li>
+                </ul>
+              </div>
+            </form>
+            <p id="search-note" class="note" role="status"></p>
+            <div class="table">
+              <div class="cols" aria-hidden="true">
+                <span></span><span>name</span><span>blocks</span><span>size</span><span></span>
+              </div>
+              <div id="list"></div>
+            </div>
+          </section>
+        </main>
       </div>
-    </header>
 
-    <main class="layout">
-      <section class="files" aria-label="Files">
-        <form id="search" class="search" role="search">
-          <input id="q" type="text" placeholder="Search  ( / )" aria-label="Search" autocomplete="off">
-          <label class="check"><input id="opt-exact" type="checkbox"> exact</label>
-          <label class="check"><input id="opt-regex" type="checkbox"> regex</label>
-          <select id="opt-type" aria-label="Type">
-            <option value="">all</option>
-            <option value="file">files</option>
-            <option value="dir">folders</option>
-          </select>
-        </form>
-        <p id="search-note" class="note" role="status"></p>
-        <div class="cols" aria-hidden="true"><span>Name</span><span>Blocks</span><span>Size</span><span></span></div>
-        <div id="list"></div>
-      </section>
+      <div id="dock" hidden>
+        <p id="notice" role="status"></p>
+        <div id="transfers" aria-live="polite"></div>
+      </div>
 
-      <aside class="side" aria-label="Accounts">
-        <h2>Accounts</h2>
-        <ul id="accounts"></ul>
-        <div id="mock-new" hidden>
-          <label for="mock-new-email">Account email</label>
-          <input id="mock-new-email" type="text" autocomplete="off">
+      <div id="scrim" hidden></div>
+      <aside id="settings-panel" aria-label="settings" hidden>
+        <div class="drawer-head">
+          <h2>settings</h2>
+          <button id="settings-close" class="icon-btn" type="button" title="close" aria-label="close settings"><svg class="ico" aria-hidden="true"><use href="#i-x"></use></svg></button>
         </div>
-        <div class="actions">
-          <button id="add-account" class="btn" type="button">Add account</button>
-          <button id="pw-toggle" class="btn quiet" type="button">Change password</button>
+
+        <div class="setting">
+          <span class="k">block size, mb</span>
+          <div class="choice" id="set-block_mb"></div>
+          <p class="hint">plaintext bytes per block. drive multipart uploads cap at 5 mb.</p>
         </div>
-        <form id="pw-form" hidden autocomplete="off">
-          <label for="pw-new">New password</label>
-          <input id="pw-new" type="password" autocomplete="off">
-          <label for="pw-new2">Repeat</label>
-          <input id="pw-new2" type="password" autocomplete="off">
-          <div class="actions">
-            <button class="btn solid" type="submit">Save</button>
-            <button id="pw-cancel" class="btn quiet" type="button">Cancel</button>
-          </div>
-        </form>
+        <div class="setting">
+          <span class="k">transfers per drive</span>
+          <div class="choice" id="set-transfers"></div>
+          <p class="hint">concurrent block requests per account.</p>
+        </div>
+        <div class="setting">
+          <span class="k">scrypt cost</span>
+          <div class="choice" id="set-kdf"></div>
+          <p class="hint">n = 2^x, r = 8, p = 1. memory is 32 mb at 2^15 and doubles per step. applies on the next password change.</p>
+        </div>
+        <div class="setting">
+          <span class="k">remember this device</span>
+          <div class="choice" id="set-keep"></div>
+          <p class="hint">skips the password on this device until it expires. the vault key stays wrapped by a non-extractable webcrypto key. lock and logout clear it.</p>
+        </div>
+        <button id="clean" class="btn with-ico" type="button"><svg class="ico" aria-hidden="true"><use href="#i-refresh"></use></svg>clean up unused blocks</button>
+
+        <h3 class="stack-title">stack</h3>
+        <dl class="stack">
+          <dt>blocks</dt><dd>aes-256-gcm, random 96-bit nonce. aad is file id, block index and block count.</dd>
+          <dt>file keys</dt><dd>hkdf-sha256 from the 256-bit master key, one key per file.</dd>
+          <dt>vault</dt><dd>fernet (aes-128-cbc, hmac-sha256). the master key is wrapped with scrypt.</dd>
+          <dt>storage</dt><dd>google drive appDataFolder, scope drive.appdata. a vault copy in every account.</dd>
+          <dt>runtime</dt><dd>python 3.12 on pyodide 0.26.4 in a web worker, with the cryptography package.</dd>
+          <dt>device</dt><dd>vault key wrapped by a non-extractable webcrypto aes-gcm key in indexeddb. only the ciphertext is stored. the password is never stored.</dd>
+          <dt>network</dt><dd>the browser talks to googleapis.com directly. this site serves static files only.</dd>
+        </dl>
+        <p class="author">built by <a href="https://veermehta.dev" target="_blank" rel="noopener noreferrer">veer mehta</a></p>
       </aside>
-    </main>
-
-    <div id="dock" hidden>
-      <p id="notice" role="status"></p>
-      <div id="transfers" aria-live="polite"></div>
     </div>
 
-    <footer id="status">
-      <span id="status-left"></span>
-      <span id="status-right"></span>
-    </footer>
-  </div>
+<div id="drop" hidden>
+      <p>drop to upload</p>
+      <small id="drop-to"></small>
+    </div>
 
-  <div id="drop" hidden>
-    <p>Drop to upload</p>
-    <small id="drop-to"></small>
-  </div>
+    <input id="pick-files" type="file" multiple hidden />
+    <input id="pick-folder" type="file" webkitdirectory hidden />
 
-  <input id="pick-files" type="file" multiple hidden>
-  <input id="pick-folder" type="file" webkitdirectory hidden>
-
-  <script src="config.js"></script>
-  <script src="auth.js"></script>
-  <script src="app.js"></script>
-</body>
+    <script src="config.js"></script>
+    <script src="auth.js"></script>
+    <script src="app.js"></script>
+  </body>
 </html>

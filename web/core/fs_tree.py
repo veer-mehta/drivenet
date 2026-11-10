@@ -7,9 +7,19 @@ def new_fs():
 
 def split_path(path):
     parts = [p for p in path.split("/") if p]
-    if any(p in (".", "..") for p in parts):
+    if any(p in (".", "..") or "\\" in p or any(ord(c) < 32 for c in p) for p in parts):
         raise ValueError(f"invalid path: {path!r}")
     return parts
+
+
+def check_parents(fs, path):
+    node = fs["root"]
+    for part in split_path(path)[:-1]:
+        node = node["children"].get(part) if node.get("type") == "dir" else None
+        if node is None:
+            return
+        if node.get("type") != "dir":
+            raise ValueError(f"'{part}' is a file, not a folder")
 
 
 def normalize(path):
@@ -62,26 +72,7 @@ def outline(node):
     return {"type": "dir", "children": {name: outline(child) for name, child in node["children"].items()}}
 
 
-def tree_lines(fs):
-    lines = ["root"]
-
-    def walk(node, prefix):
-        children = list(node["children"].items())
-        for i, (name, child) in enumerate(children):
-            last = i == len(children) - 1
-            branch = "└── " if last else "├── "
-            if child.get("type") == "file":
-                tag = " [encrypted]" if child.get("encrypted", True) else " [raw]"
-                lines.append(prefix + branch + name + tag)
-            else:
-                lines.append(prefix + branch + name)
-                walk(child, prefix + ("    " if last else "│   "))
-
-    walk(fs["root"], "")
-    return lines
-
-
-def search(fs, query="", exact=False, use_regex=False, filter_type=None, filter_mode=None):
+def search(fs, query="", exact=False, use_regex=False, filter_type=None):
     pattern = re.compile(query, re.IGNORECASE) if use_regex and query else None
     query_lower = query.lower()
     results = []
@@ -90,7 +81,6 @@ def search(fs, query="", exact=False, use_regex=False, filter_type=None, filter_
         for name, child in node["children"].items():
             node_path = f"{current_path}/{name}"
             kind = child.get("type", "file")
-            encrypted = child.get("encrypted", True) if kind == "file" else None
 
             if not query:
                 match = True
@@ -103,20 +93,9 @@ def search(fs, query="", exact=False, use_regex=False, filter_type=None, filter_
 
             if filter_type and kind != filter_type:
                 match = False
-            if filter_mode == "encrypted" and encrypted is not True:
-                match = False
-            if filter_mode == "raw" and encrypted is not False:
-                match = False
 
             if match:
-                results.append({
-                    "path": node_path,
-                    "name": name,
-                    "type": kind,
-                    "size": child.get("size", 0),
-                    "encrypted": encrypted,
-                    "chunks": child.get("chunks", []) if kind == "file" else [],
-                })
+                results.append({"path": node_path, "name": name, "type": kind, "size": child.get("size", 0)})
             if kind == "dir":
                 walk(child, node_path)
 

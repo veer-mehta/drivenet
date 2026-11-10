@@ -12,6 +12,10 @@ class VaultStorage(ABC):
     async def write(self, account, blob):
         pass
 
+    @abstractmethod
+    async def delete(self, account):
+        pass
+
 
 class DriveTransport(ABC):
     @abstractmethod
@@ -24,4 +28,8 @@ class DriveTransport(ABC):
 
     @abstractmethod
     async def delete(self, account, drive_id):
+        pass
+
+    @abstractmethod
+    async def list_chunks(self, account):
         pass
