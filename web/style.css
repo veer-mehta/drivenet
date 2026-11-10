@@ -328,7 +328,7 @@ body.has-dock .shell { padding-bottom: 200px; }
 
 
 #scrim { position: fixed; inset: 0; z-index: 7; background: rgba(0, 0, 0, 0.62); }
-#settings-panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 8; width: min(420px, 100%); padding: 18px 24px 32px; overflow: auto; background: #0f0f0f; border-left: 1px solid var(--line); }
+#settings-panel, #upload-panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 8; width: min(420px, 100%); padding: 18px 24px 32px; overflow: auto; background: #0f0f0f; border-left: 1px solid var(--line); }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; height: 32px; margin-bottom: 24px; }
 .setting { margin-bottom: 26px; }
 .setting .k { display: block; margin-bottom: 8px; }
@@ -384,3 +384,15 @@ body.busy .btn, body.busy .icon-btn, body.busy .row .acts button { pointer-event
 .author a:hover { text-decoration-color: var(--red); }
 
 .note.info { color: var(--dim); }
+
+#up-drives { display: grid; gap: 6px; }
+#up-drives .btn { justify-self: start; }
+.drive-pick { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 12px; color: var(--fg); text-align: left; background: #151515; border: 1px solid #3a3a3a; border-radius: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-pick:hover { border-color: var(--hi); }
+.drive-pick[aria-pressed="true"] { color: var(--hi); background: #1d1d1d; border-color: var(--fg); box-shadow: inset 3px 0 0 var(--fg); }
+.hint.warning { color: var(--red); }
+.badge { margin-left: 10px; padding: 0 6px; font-size: 11px; font-weight: 400; color: var(--red); border: 1px solid var(--red); }
+.row.sel .badge { color: #a01008; border-color: #a01008; }
+.acc-move { margin-top: 10px; padding-top: 10px; display: grid; gap: 10px; border-top: 1px solid var(--line); }
+.acc-move p { margin: 0; font-size: 12px; color: var(--fg); }
+.acc-move-buttons { display: flex; flex-wrap: wrap; gap: 8px; }

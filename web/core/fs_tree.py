@@ -1,5 +1,11 @@
 import re
 
+from .blockcrypt import PLAIN
+
+
+def is_encrypted(node):
+    return node.get("cipher") != PLAIN and node.get("encrypted", True)
+
 
 def new_fs():
     return {"root": {"type": "dir", "children": {}}}
@@ -68,7 +74,10 @@ def iter_files(node, path=""):
 
 def outline(node):
     if node.get("type") == "file":
-        return {"type": "file", "size": node.get("size", 0), "shards": [chunk[1] for chunk in node.get("chunks", [])]}
+        return {
+            "type": "file", "size": node.get("size", 0), "encrypted": is_encrypted(node),
+            "shards": [chunk[1] for chunk in node.get("chunks", [])],
+        }
     return {"type": "dir", "children": {name: outline(child) for name, child in node["children"].items()}}
 
 

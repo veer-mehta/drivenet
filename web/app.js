@@ -360,7 +360,7 @@ function weight(node) {
 function entries(node, base) {
   const join = (name) => (base === "/" ? "" : base) + "/" + name;
   return Object.entries(node.children)
-    .map(([name, child]) => ({ name, path: join(name), type: child.type, size: weight(child), shards: child.shards || [] }))
+    .map(([name, child]) => ({ name, path: join(name), type: child.type, size: weight(child), shards: child.shards || [], encrypted: child.encrypted !== false }))
     .sort((a, b) => (b.type === "dir") - (a.type === "dir") || a.name.localeCompare(b.name));
 }
 
@@ -695,10 +695,10 @@ function resume(item) {
     if (picked.file.size !== item.size || picked.file.lastModified !== item.stamp) {
       throw new Error("that is not the same file. choose the exact file you were uploading");
     }
-    const accounts = ui.state.accounts.length;
-    const bar = transfer(`continuing ${item.path}`, (idx) => idx % accounts);
+    const drives = item.accounts && item.accounts.length ? item.accounts : ui.state.accounts;
+    const bar = transfer(`continuing ${item.path}`, (idx) => accountIndex(drives[idx % drives.length]));
     try {
-      await tracked(bar, call("upload", picked.file, item.path));
+      await tracked(bar, call("upload", picked.file, item.path, JSON.stringify({ accounts: item.accounts, encrypt: item.encrypt })));
       notice(`finished ${item.path}`);
     } finally {
       await refresh();
@@ -763,6 +763,7 @@ function makeRow(item, flat) {
   kind.append(icon(dir ? "folder" : "file"));
   const label = flat ? item.path : item.name + (dir ? "/" : "");
   const name = dir || flat ? textButton(label, () => go(dir ? item.path : parentOf(item.path)), "link name" + (dir ? " dir" : "")) : element("span", "name", label);
+  if (!dir && item.encrypted === false) name.append(element("span", "badge", "not encrypted"));
   const strip = cellRow(dir ? [] : sample(item.shards, 10), "strip");
   if (!dir) strip.title = plural(item.shards.length, "block");
   const actions = element("span", "acts");
@@ -792,7 +793,7 @@ function renderList() {
     flat = true;
     rows = ui.found.map((hit) => {
       const node = lookup(hit.path);
-      return { ...hit, size: node ? weight(node) : hit.size, shards: (node && node.shards) || [] };
+      return { ...hit, size: node ? weight(node) : hit.size, shards: (node && node.shards) || [], encrypted: !node || node.encrypted !== false };
     });
   } else {
     const node = lookup(ui.cwd);
@@ -832,8 +833,23 @@ function renderAccounts() {
   const { accounts, usage } = ui.state;
   accounts.forEach((email, index) => {
     const connected = Auth.isConnected(email);
+    const held = usage[email] || 0;
     const item = element("li", "account " + shardClass(index));
     const tools = element("span", "acc-tools");
+    const askToMove = () => {
+      if (item.querySelector(".acc-move")) return;
+      const panel = element("div", "acc-move");
+      const buttons = element("div", "acc-move-buttons");
+      const go = element("button", "btn solid", "move and remove");
+      go.type = "button";
+      go.onclick = () => {
+        panel.remove();
+        moveAndRemove(email, held);
+      };
+      buttons.append(go, textButton("cancel", () => panel.remove(), "btn quiet"));
+      panel.append(element("p", "", `${plural(held, "block")} on this drive must move to the other drives first.`), buttons);
+      item.append(panel);
+    };
     const idle = () => {
       tools.replaceChildren();
       if (!connected) {
@@ -843,6 +859,7 @@ function renderAccounts() {
         })));
       }
       tools.append(iconButton("trash", "remove from vault", () => {
+        if (held) return askToMove();
         tools.replaceChildren(
           element("span", "ask", "remove?"),
           textButton("yes", () => run(async () => {
@@ -886,16 +903,121 @@ function remove(item) {
   });
 }
 
-async function uploadAll(files) {
+function moveAndRemove(email, held) {
+  run(async () => {
+    requireConnected();
+    const bar = transfer(`moving ${email}`);
+    try {
+      await tracked(bar, call("remove_account", email, true));
+    } finally {
+      await refresh();
+    }
+    notice(`moved ${plural(held, "block")} and removed ${email}`);
+  });
+}
+
+let uploadResolve = null;
+
+function finishUpload(options) {
+  $("upload-panel").hidden = true;
+  $("scrim").hidden = true;
+  const resolve = uploadResolve;
+  uploadResolve = null;
+  if (resolve) resolve(options);
+}
+
+function chooseUpload(files) {
+  return new Promise((resolve) => {
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem("drivenet.uploadPrefs") || "{}");
+    } catch (err) {
+      saved = {};
+    }
+    const all = ui.state.accounts;
+    const picked = new Set((saved.accounts || []).filter((email) => all.includes(email)));
+    if (!picked.size) all.forEach((email) => picked.add(email));
+    let encrypt = saved.encrypt !== false;
+    $("upload-summary").textContent = `${plural(files.length, "file")}, ${formatBytes(files.reduce((sum, item) => sum + item.file.size, 0))} into ${ui.cwd}`;
+
+    const draw = () => {
+      const choice = $("up-encrypt");
+      choice.replaceChildren();
+      for (const [label, value] of [["encrypted", true], ["not encrypted", false]]) {
+        const option = textButton(label, () => {
+          encrypt = value;
+          draw();
+        });
+        option.setAttribute("aria-pressed", String(encrypt === value));
+        choice.append(option);
+      }
+      const note = $("up-encrypt-note");
+      note.textContent = encrypt
+        ? "aes-256-gcm. google only sees random bytes."
+        : "stored as is. anyone with access to these google accounts can read it. blocks are still checked with sha-256.";
+      note.classList.toggle("warning", !encrypt);
+
+      const box = $("up-drives");
+      box.replaceChildren();
+      all.forEach((email, index) => {
+        const option = element("button", "drive-pick");
+        option.type = "button";
+        option.append(element("span", shardClass(index), "■"), email);
+        option.setAttribute("aria-pressed", String(picked.has(email)));
+        option.onclick = () => {
+          if (!picked.has(email)) picked.add(email);
+          else if (picked.size > 1) picked.delete(email);
+          draw();
+        };
+        box.append(option);
+      });
+      if (all.length > 1 && picked.size < all.length) {
+        box.append(textButton("select all drives", () => {
+          all.forEach((email) => picked.add(email));
+          draw();
+        }, "btn quiet"));
+      }
+    };
+    draw();
+
+    uploadResolve = resolve;
+    $("upload-go").onclick = () => {
+      const options = { encrypt, accounts: all.filter((email) => picked.has(email)) };
+      try {
+        localStorage.setItem("drivenet.uploadPrefs", JSON.stringify(options));
+      } catch (err) {
+        notice("could not remember these choices", true);
+      }
+      finishUpload(options);
+    };
+    $("upload-panel").hidden = false;
+    $("scrim").hidden = false;
+  });
+}
+
+async function startUpload(files) {
   if (!files.length) return;
-  requireConnected();
+  if (ui.busy) {
+    notice("wait for the current job to finish.", true);
+    return;
+  }
+  try {
+    requireConnected();
+    const options = await chooseUpload(files);
+    if (options) await run(() => uploadAll(files, options));
+  } catch (err) {
+    notice(err.message, true);
+  }
+}
+
+async function uploadAll(files, options) {
   const base = ui.cwd === "/" ? "" : ui.cwd;
-  const accounts = ui.state.accounts.length;
   const total = files.reduce((sum, item) => sum + item.file.size, 0);
+  const owner = (idx) => accountIndex(options.accounts[idx % options.accounts.length]);
   try {
     for (const { file, rel } of files) {
-      const bar = transfer(`uploading ${rel}`, (idx) => idx % accounts);
-      await tracked(bar, call("upload", file, `${base}/${rel}`));
+      const bar = transfer(`uploading ${rel}`, owner);
+      await tracked(bar, call("upload", file, `${base}/${rel}`, JSON.stringify(options)));
     }
   } finally {
     try { await refresh(); } catch (err) { notice(err.message, true); }
@@ -1154,7 +1276,14 @@ function openSettings(open) {
 
 $("settings-toggle").onclick = () => openSettings($("settings-panel").hidden);
 $("settings-close").onclick = () => openSettings(false);
-$("scrim").onclick = () => openSettings(false);
+function closeOverlays() {
+  if (!$("upload-panel").hidden) finishUpload(null);
+  openSettings(false);
+}
+
+$("scrim").onclick = closeOverlays;
+$("upload-close").onclick = () => finishUpload(null);
+$("upload-cancel").onclick = () => finishUpload(null);
 
 $("clean").onclick = () => run(async () => {
   requireConnected();
@@ -1163,8 +1292,8 @@ $("clean").onclick = () => run(async () => {
   notice(removed ? `removed ${plural(removed, "unused block")}` : "nothing to clean up");
 });
 
-$("up-files").onclick = () => run(async () => uploadAll(await pick(false)));
-$("up-folder").onclick = () => run(async () => uploadAll(await pick(true)));
+$("up-files").onclick = async () => startUpload(await pick(false));
+$("up-folder").onclick = async () => startUpload(await pick(true));
 
 const scheduleSearch = () => {
   clearTimeout(ui.searchTimer);
@@ -1208,7 +1337,7 @@ const press = (selector, index = 0) => {
 
 document.addEventListener("keydown", (event) => {
   if ($("app").hidden || event.ctrlKey || event.metaKey || event.altKey) return;
-  if (event.key === "Escape" && !$("settings-panel").hidden) return openSettings(false);
+  if (event.key === "Escape" && (!$("settings-panel").hidden || !$("upload-panel").hidden)) return closeOverlays();
   if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) {
     if (event.key === "Escape" && event.target === $("q")) {
       $("q").value = "";
@@ -1263,7 +1392,7 @@ document.addEventListener("drop", (event) => {
   const transfer = event.dataTransfer;
   const roots = [...transfer.items].map((item) => item.webkitGetAsEntry && item.webkitGetAsEntry());
   const plain = [...transfer.files];
-  run(async () => uploadAll(await filesFromDrop(roots, plain)));
+  filesFromDrop(roots, plain).then(startUpload);
 });
 
 startDemo();

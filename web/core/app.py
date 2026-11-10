@@ -74,15 +74,19 @@ class App:
                 "accepts the old password. connect that account and change the password again"
             )
 
-    async def remove_account(self, account):
+    async def remove_account(self, account, migrate=False, progress=None):
         if account not in self.vault.accounts:
             raise StorageError(f"{account} is not in this vault")
         if len(self.vault.accounts) == 1:
             raise StorageError("a vault needs at least one account")
+        remaining = [a for a in self.vault.accounts if a != account]
         await self.engine.sweep()
         held = self.state()["usage"].get(account, 0)
+        if held and not migrate:
+            raise StorageError(f"{account} still holds {held} blocks. move them to the other drives or delete those files first")
         if held:
-            raise StorageError(f"{account} still holds {held} blocks; delete those files first")
+            await self.engine.migrate(account, remaining, progress)
+            await self.engine.sweep()
         if any(owner == account for _, owner in self.vault.trash):
             raise StorageError(f"{account} still has blocks waiting to be deleted. try again in a moment")
         try:
@@ -90,6 +94,7 @@ class App:
         except Exception as error:
             raise StorageError(f"connect {account} first so its copy of the vault can be removed ({error})") from None
         self.vault.accounts.remove(account)
+        self.engine.forget_account(account, remaining)
         await self.sync.save(self.vault)
 
     def state(self):
@@ -97,7 +102,7 @@ class App:
         usage = {account: 0 for account in self.vault.accounts}
         files = []
         for path, node in fs_tree.iter_files(fs["root"]):
-            files.append({"path": path, "size": node.get("size", 0)})
+            files.append({"path": path, "size": node.get("size", 0), "encrypted": fs_tree.is_encrypted(node)})
             for _, account in node["chunks"]:
                 usage[account] = usage.get(account, 0) + 1
         unfinished = []
@@ -107,6 +112,7 @@ class App:
             unfinished.append({
                 "path": path, "size": entry["size"], "stamp": entry["stamp"],
                 "done": len(entry["done"]), "total": entry["total"],
+                "accounts": entry.get("accounts"), "encrypt": entry.get("encrypt", True),
             })
         return {
             "accounts": list(self.vault.accounts),
@@ -136,8 +142,15 @@ class App:
             raise ValueError(f"invalid pattern: {exc}") from None
         return [{"path": r["path"], "name": r["name"], "type": r["type"], "size": r["size"]} for r in found]
 
-    async def upload(self, read_at, size, remote_path, progress=None, stamp=0):
-        await self.engine.upload_file(read_at, size, remote_path, self.vault.accounts, progress, stamp)
+    async def upload(self, read_at, size, remote_path, progress=None, stamp=0, accounts=None, encrypt=True):
+        if accounts:
+            unknown = set(accounts) - set(self.vault.accounts)
+            if unknown:
+                raise StorageError(f"not a drive in this vault: {', '.join(sorted(unknown))}")
+            chosen = [a for a in self.vault.accounts if a in set(accounts)]
+        else:
+            chosen = list(self.vault.accounts)
+        await self.engine.upload_file(read_at, size, remote_path, chosen, progress, stamp, bool(encrypt))
 
     async def download(self, remote_path, write, progress=None, start=0):
         await self.engine.download_file(remote_path, write, progress, start)

@@ -5,6 +5,8 @@ Splits files into encrypted blocks and spreads them across several Google Drive 
 ## How it works
 
 - Files are split into blocks (5 MB by default) and encrypted with AES-256-GCM before they leave your machine. Each file has its own key, and every block is authenticated against its file and position, so a tampered, swapped or reordered block is rejected.
+- Each upload lets you choose whether to encrypt and which drives to use. Blocks are spread across the drives you pick, so one drive keeps a file whole on that drive and a group shares it. A file stored without encryption is readable by anyone with access to those Google accounts, is marked as not encrypted in the file list, and still has every block checked with SHA-256.
+- Removing a drive that still holds data offers to move its blocks to the remaining drives first. Blocks are copied as they are, files pinned to a group stay inside that group where possible, and an interrupted move continues when you run it again.
 - An unfinished upload is journaled in the vault. If it stops for any reason, upload the same file again and it continues from the last saved block.
 - Deletes are journaled too, and a clean up action removes blocks on your drives that no file refers to.
 - Blocks are spread round-robin across your Google accounts and stored in each account's hidden app data folder.

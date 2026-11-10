@@ -25,6 +25,27 @@ def new_password():
     return first
 
 
+def ask_upload_options(session):
+    drives = session.state()["accounts"]
+    encrypt = input("encrypt? (Y/n): ").strip().lower() != "n"
+    chosen = None
+    if len(drives) > 1:
+        for number, email in enumerate(drives, 1):
+            print(f"  {number}> {email}")
+        raw = input("store on which drives? (enter for all, or numbers like 1,3): ").replace(" ", "")
+        if raw:
+            try:
+                picks = [int(part) for part in raw.split(",") if part]
+            except ValueError:
+                picks = []
+            if not picks or any(number < 1 or number > len(drives) for number in picks):
+                raise ValueError("pick numbers from the list")
+            chosen = [drives[number - 1] for number in dict.fromkeys(picks)]
+    if not encrypt:
+        print("warning: not encrypted. anyone with access to those google accounts can read it.")
+    return chosen, encrypt
+
+
 def connect_missing(session, accounts):
     for email in session.state()["accounts"]:
         while not accounts.is_connected(email):
@@ -85,7 +106,13 @@ def manage_accounts(session, accounts):
             print(f"added {email}")
         case "2":
             email = input("account email: ").strip()
-            session.remove_account(email)
+            held = session.state()["usage"].get(email, 0)
+            migrate = False
+            if held:
+                migrate = input(f"{email} holds {held} blocks. move them to the other drives? (y/N): ").strip().lower() == "y"
+                if migrate:
+                    connect_missing(session, accounts)
+            session.remove_account(email, migrate)
             print(f"removed {email}")
         case "3":
             connect_missing(session, accounts)
@@ -144,11 +171,15 @@ def run_command(session, accounts, choice):
             print("\n" + "\n".join(session.tree_lines()))
         case "3":
             connect_missing(session, accounts)
-            session.upload_file(input("enter local path: "), input("enter remote path: "))
+            local, remote = input("enter local path: "), input("enter remote path: ")
+            drives, encrypt = ask_upload_options(session)
+            session.upload_file(local, remote, drives, encrypt)
             print("upload successful")
         case "4":
             connect_missing(session, accounts)
-            count = session.upload_folder(input("enter local path: "), input("enter remote path: "))
+            local, remote = input("enter local path: "), input("enter remote path: ")
+            drives, encrypt = ask_upload_options(session)
+            count = session.upload_folder(local, remote, drives, encrypt)
             print(f"upload successful ({count} files)")
         case "5":
             connect_missing(session, accounts)

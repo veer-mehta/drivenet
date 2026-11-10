@@ -89,7 +89,8 @@ class Session:
             for index, name in enumerate(names):
                 child = node["children"][name]
                 last = index == len(names) - 1
-                lines.append(prefix + ("└── " if last else "├── ") + name + ("/" if child["type"] == "dir" else ""))
+                mark = "  (not encrypted)" if child["type"] == "file" and child.get("encrypted") is False else ""
+                lines.append(prefix + ("└── " if last else "├── ") + name + ("/" if child["type"] == "dir" else "") + mark)
                 if child["type"] == "dir":
                     walk(child, prefix + ("    " if last else "│   "))
 
@@ -99,7 +100,7 @@ class Session:
     def search(self, query, exact=False, use_regex=False, filter_type=None):
         return self.app.search(query, exact, use_regex, filter_type)
 
-    def upload_file(self, local_path, remote_path):
+    def upload_file(self, local_path, remote_path, accounts=None, encrypt=True):
         if not os.path.isfile(local_path):
             raise StorageError(f"local file not found: {local_path}")
         if not remote_path or remote_path.endswith("/"):
@@ -111,9 +112,11 @@ class Session:
                 source.seek(offset)
                 return source.read(count)
 
-            self._run(self.app.upload(read_at, size, remote_path, _progress_printer(os.path.basename(local_path)), stamp))
+            self._run(self.app.upload(
+                read_at, size, remote_path, _progress_printer(os.path.basename(local_path)), stamp, accounts, encrypt,
+            ))
 
-    def upload_folder(self, local_dir, remote_dir):
+    def upload_folder(self, local_dir, remote_dir, accounts=None, encrypt=True):
         if not os.path.isdir(local_dir):
             raise StorageError(f"local folder not found: {local_dir}")
         remote_dir = (remote_dir or os.path.basename(local_dir.rstrip("/\\"))).rstrip("/")
@@ -122,7 +125,7 @@ class Session:
             relative = os.path.relpath(root, local_dir).replace(os.sep, "/")
             for name in sorted(names):
                 target = remote_dir + ("" if relative == "." else "/" + relative) + "/" + name
-                self.upload_file(os.path.join(root, name), target)
+                self.upload_file(os.path.join(root, name), target, accounts, encrypt)
                 count += 1
         return count
 
@@ -183,8 +186,8 @@ class Session:
     def add_account(self, email):
         self._run(self.app.add_account(email))
 
-    def remove_account(self, email):
-        self._run(self.app.remove_account(email))
+    def remove_account(self, email, migrate=False):
+        self._run(self.app.remove_account(email, migrate, _progress_printer("moving")))
 
     def change_password(self, password):
         self._run(self.app.change_password(password))

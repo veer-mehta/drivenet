@@ -68,12 +68,16 @@ def state():
     return json.dumps(session.state())
 
 
-async def upload(file, remote_path):
+async def upload(file, remote_path, options_json=""):
     async def read_at(offset, n):
         buffer = await file.slice(offset, offset + n).arrayBuffer()
         return buffer.to_bytes()
 
-    await session.upload(read_at, int(file.size), remote_path, _progress, int(file.lastModified))
+    options = json.loads(options_json) if options_json else {}
+    await session.upload(
+        read_at, int(file.size), remote_path, _progress, int(file.lastModified),
+        options.get("accounts"), options.get("encrypt", True),
+    )
 
 
 async def download(remote_path):
@@ -101,8 +105,8 @@ async def change_password(password):
     await session.change_password(password)
 
 
-async def remove_account(email):
-    await session.remove_account(email)
+async def remove_account(email, migrate=False):
+    await session.remove_account(email, bool(migrate), _progress)
 
 
 def search(query, exact, use_regex, filter_type):

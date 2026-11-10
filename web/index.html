@@ -244,6 +244,28 @@
         <div id="transfers" aria-live="polite"></div>
       </div>
 
+      <aside id="upload-panel" aria-label="upload options" hidden>
+        <div class="drawer-head">
+          <h2>upload</h2>
+          <button id="upload-close" class="icon-btn" type="button" title="close" aria-label="close upload options"><svg class="ico" aria-hidden="true"><use href="#i-x"></use></svg></button>
+        </div>
+        <p id="upload-summary" class="dim"></p>
+        <div class="setting">
+          <span class="k">encryption</span>
+          <div class="choice" id="up-encrypt"></div>
+          <p id="up-encrypt-note" class="hint"></p>
+        </div>
+        <div class="setting">
+          <span class="k">store on</span>
+          <div id="up-drives"></div>
+          <p class="hint">blocks are spread across the drives you pick. pick one to keep the whole file on that drive.</p>
+        </div>
+        <div class="actions">
+          <button id="upload-go" class="btn solid" type="button">upload</button>
+          <button id="upload-cancel" class="btn quiet" type="button">cancel</button>
+        </div>
+      </aside>
+
       <div id="scrim" hidden></div>
       <aside id="settings-panel" aria-label="settings" hidden>
         <div class="drawer-head">

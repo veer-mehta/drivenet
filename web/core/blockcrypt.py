@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 SCHEME = "gcm1"
+PLAIN = "plain1"
 VERSION = b"\x01"
 NONCE_SIZE = 12
 TAG_SIZE = 16

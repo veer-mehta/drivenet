@@ -1,9 +1,10 @@
 import asyncio
+import hashlib
 import inspect
 import time
 
 from . import fs_tree
-from .blockcrypt import SCHEME, BlockError, new_file_id
+from .blockcrypt import PLAIN, SCHEME, BlockError, new_file_id
 from .vault import VaultLocked
 
 LEGACY_BLOCK_SIZE = 5 * 1024 * 1024
@@ -13,6 +14,10 @@ CHECKPOINT_SECONDS = 6
 
 class StorageError(Exception):
     pass
+
+
+def block_name(owner, idx):
+    return f"{owner['fid']}.{idx}" if owner.get("fid") else f"{owner['name']}.chunk{idx}"
 
 
 async def _resolve(value):
@@ -65,11 +70,16 @@ class Engine:
             raise StorageError(f"not a file: {remote_path}")
         return node
 
-    def _begin(self, remote_path, name, size, stamp):
+    def _begin(self, remote_path, name, size, stamp, accounts, encrypt):
         pending = self.vault.pending
         block_size = int(self.vault.settings["block_mb"] * 1024 * 1024)
         entry = pending.get(remote_path)
-        if entry and entry["size"] == size and entry["stamp"] == stamp:
+        if (
+            entry and entry["size"] == size and entry["stamp"] == stamp
+            and entry.get("accounts", accounts) == accounts and entry.get("encrypt", True) == encrypt
+        ):
+            entry.setdefault("accounts", list(accounts))
+            entry.setdefault("encrypt", encrypt)
             return entry
         if entry:
             self.vault.trash.extend(entry["done"].values())
@@ -80,13 +90,16 @@ class Engine:
             "stamp": stamp,
             "block_size": block_size,
             "total": (size + block_size - 1) // block_size,
+            "accounts": list(accounts),
+            "encrypt": encrypt,
+            "hashes": {},
             "done": {},
             "started": time.time(),
         }
         pending[remote_path] = entry
         return entry
 
-    async def upload_file(self, read_at, size, remote_path, accounts, progress=None, stamp=0):
+    async def upload_file(self, read_at, size, remote_path, accounts, progress=None, stamp=0, encrypt=True):
         if not accounts:
             raise StorageError("no accounts available")
         try:
@@ -101,21 +114,26 @@ class Engine:
         if existing is not None and existing.get("type") != "file":
             raise StorageError(f"{remote_path} is a folder")
 
-        entry = self._begin(remote_path, name, size, stamp)
+        entry = self._begin(remote_path, name, size, stamp, list(accounts), bool(encrypt))
         fid, total, block_size, done = entry["fid"], entry["total"], entry["block_size"], entry["done"]
+        placement, encrypted, hashes = entry["accounts"], entry["encrypt"], entry.setdefault("hashes", {})
         await self._checkpoint(force=True)
 
         async def send_block(idx):
             if str(idx) in done:
                 return
-            account = accounts[idx % len(accounts)]
+            account = placement[idx % len(placement)]
             async with self._limit(account):
                 data = await _resolve(read_at(idx * block_size, block_size))
                 if len(data) != min(block_size, size - idx * block_size):
                     raise StorageError("the file changed while it was uploading")
-                sealed = self.vault.cipher.seal(fid, idx, total, data)
+                if encrypted:
+                    payload = self.vault.cipher.seal(fid, idx, total, data)
+                else:
+                    payload = data
+                    hashes[str(idx)] = hashlib.sha256(data).hexdigest()
                 drive_id = await self.transport.upload(
-                    account, f"{fid}.{idx}", sealed, {"type": "chunk", "order": str(idx)}
+                    account, f"{fid}.{idx}", payload, {"type": "chunk", "order": str(idx)}
                 )
             done[str(idx)] = [drive_id, account]
             if progress:
@@ -146,12 +164,15 @@ class Engine:
             "type": "file",
             "name": name,
             "size": size,
-            "cipher": SCHEME,
+            "cipher": SCHEME if encrypted else PLAIN,
             "fid": fid,
             "block_size": block_size,
+            "accounts": list(placement),
             "chunks": [done[str(i)] for i in range(total)],
             "timestamp": time.time(),
         }
+        if not encrypted:
+            node["hashes"] = [hashes[str(i)] for i in range(total)]
         replaced = list(existing.get("chunks", [])) if existing else []
         fs_tree.add_file(self.fs, remote_path, node)
         del self.vault.pending[remote_path]
@@ -188,6 +209,10 @@ class Engine:
 
         def decode(idx, raw):
             try:
+                if scheme == PLAIN:
+                    if hashlib.sha256(raw).hexdigest() != node["hashes"][idx]:
+                        raise BlockError("hash mismatch")
+                    return raw
                 if scheme == SCHEME:
                     return self.vault.cipher.open(fid, idx, total, raw)
                 return self.vault.cipher.open_legacy(raw) if encrypted else raw
@@ -294,6 +319,65 @@ class Engine:
         chunks = list(entry["done"].values())
         await self._retire(chunks, lambda: self.vault.pending.__setitem__(remote_path, entry))
         await self._purge(chunks)
+
+    async def migrate(self, account, remaining, progress=None):
+        jobs, touched = [], []
+        for _, node in fs_tree.iter_files(self.fs["root"]):
+            allowed = [a for a in node.get("accounts", []) if a in remaining] or list(remaining)
+            moving = [i for i, (_, owner) in enumerate(node["chunks"]) if owner == account]
+            jobs += [(node["chunks"], i, block_name(node, i), i, allowed) for i in moving]
+            if moving:
+                touched.append((node, allowed))
+        for entry in self.vault.pending.values():
+            allowed = [a for a in entry.get("accounts", []) if a in remaining] or list(remaining)
+            entry["accounts"] = allowed
+            jobs += [
+                (entry["done"], key, block_name(entry, key), int(key), allowed)
+                for key, (_, owner) in list(entry["done"].items()) if owner == account
+            ]
+        total, finished = len(jobs), 0
+
+        async def move(n, job):
+            nonlocal finished
+            slot, key, name, idx, allowed = job
+            old_id = slot[key][0]
+            target = allowed[n % len(allowed)]
+            async with self._limit(account):
+                raw = await self.transport.download(account, old_id)
+            async with self._limit(target):
+                new_id = await self.transport.upload(target, name, raw, {"type": "chunk", "order": str(idx)})
+            slot[key] = [new_id, target]
+            self.vault.trash.append([old_id, account])
+            finished += 1
+            if progress:
+                progress(finished, total, idx)
+            await self._checkpoint()
+
+        tasks = [asyncio.ensure_future(move(n, job)) for n, job in enumerate(jobs)]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException as error:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await self._checkpoint(force=True)
+            except Exception:
+                pass
+            if isinstance(error, VaultLocked) or not isinstance(error, Exception):
+                raise
+            raise StorageError(f"moved {finished} of {total} blocks, then stopped ({error}). try again to continue") from error
+        for node, allowed in touched:
+            node["accounts"] = allowed
+        await self._save()
+        return total
+
+    def forget_account(self, account, remaining):
+        for _, node in fs_tree.iter_files(self.fs["root"]):
+            if "accounts" in node:
+                node["accounts"] = [a for a in node["accounts"] if a != account] or list(remaining)
+        for entry in self.vault.pending.values():
+            entry["accounts"] = [a for a in entry.get("accounts", []) if a != account] or list(remaining)
 
     def _referenced(self):
         held = {(drive_id, account) for _, node in fs_tree.iter_files(self.fs["root"]) for drive_id, account in node["chunks"]}
